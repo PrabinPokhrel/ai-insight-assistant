@@ -1,13 +1,15 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 import plotly.express as px
-import sqlite3
+from sqlalchemy import create_engine, text
+from dotenv import load_dotenv
 from groq import Groq
+import sqlite3
 import os
 import re
-from dotenv import load_dotenv
+import tempfile
 
-# ── Load API key ─────────────────────────────────────────────────────────────
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
@@ -16,45 +18,31 @@ if not GROQ_API_KEY:
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AI Business Insight Assistant",
     page_icon="📊",
     layout="wide"
 )
 
-# ── Database setup ────────────────────────────────────────────────────────────
-DB_PATH = "data/superstore.db"
+# ── Database helpers ──────────────────────────────────────────────────────────
 
-CSV_FILES = {
-    "Sample - Superstore.csv": "superstore",
-    "Sample_-_Superstore.csv": "superstore",
-    "superstore.csv":          "superstore",
-}
+DEFAULT_CSV   = "data/Sample - Superstore.csv"
+DEFAULT_DB    = "data/superstore.db"
+DEFAULT_TABLE = "superstore"
 
-def load_database():
-    conn   = sqlite3.connect(DB_PATH)
-    loaded = False
-    for filename, table_name in CSV_FILES.items():
-        filepath = os.path.join("data", filename)
-        if os.path.exists(filepath):
-            try:
-                df = pd.read_csv(filepath, encoding='latin-1')
-                df.columns = [
-                    c.strip().replace(" ", "_").replace("-", "_")
-                     .replace("/", "_").lower()
-                    for c in df.columns
-                ]
-                df.to_sql(table_name, conn, if_exists="replace", index=False)
-                loaded = True
-                break
-            except Exception as e:
-                st.error(f"Error loading {filename}: {e}")
+def csv_to_sqlite(df, table_name, db_path):
+    df.columns = [
+        c.strip().replace(" ", "_").replace("-", "_")
+         .replace("/", "_").replace("(", "").replace(")", "").lower()
+        for c in df.columns
+    ]
+    conn = sqlite3.connect(db_path)
+    df.to_sql(table_name, conn, if_exists="replace", index=False)
     conn.close()
-    return loaded
+    return df.columns.tolist()
 
-def get_schema():
-    conn   = sqlite3.connect(DB_PATH)
+def get_schema(db_path):
+    conn   = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     tables = cursor.fetchall()
@@ -67,8 +55,8 @@ def get_schema():
     conn.close()
     return schema
 
-def run_query(sql):
-    conn = sqlite3.connect(DB_PATH)
+def run_query(sql, db_path):
+    conn = sqlite3.connect(db_path)
     try:
         df = pd.read_sql_query(sql, conn)
         conn.close()
@@ -108,8 +96,8 @@ Instructions:
 2. The query must be valid SQLite syntax
 3. Always use lowercase column names with underscores as shown in the schema
 4. Return ONLY the SQL query inside ```sql ``` code blocks
-5. After the SQL write a brief 1-2 sentence explanation of what the query does
-6. Limit results to 20 rows maximum unless the question asks for all data
+5. After the SQL write a brief 1-2 sentence explanation
+6. Limit results to 20 rows maximum unless asked for all data
 
 SQL Query:"""
 
@@ -121,77 +109,102 @@ SQL Query:"""
     return response.choices[0].message.content
 
 def generate_chart(df, question):
-    if df is None or df.empty:
+    if df is None or df.empty or len(df.columns) < 2:
         return None
     q            = question.lower()
     numeric_cols = df.select_dtypes(include='number').columns.tolist()
     text_cols    = df.select_dtypes(include='object').columns.tolist()
-
-    if len(df.columns) < 2:
-        return None
-
     x_col = text_cols[0]    if text_cols    else df.columns[0]
     y_col = numeric_cols[0] if numeric_cols else df.columns[1]
-
     try:
-        if any(w in q for w in ['trend', 'over time', 'monthly', 'yearly', 'daily']):
-            fig = px.line(df, x=x_col, y=y_col,
-                          title=question.title(),
+        if any(w in q for w in ['trend', 'over time', 'monthly', 'yearly', 'daily', 'week']):
+            fig = px.line(df, x=x_col, y=y_col, title=question.title(),
                           color_discrete_sequence=['#378ADD'])
-        elif any(w in q for w in ['compare', 'vs', 'versus', 'difference']):
-            fig = px.bar(df, x=x_col, y=y_col,
-                         title=question.title(),
+        elif any(w in q for w in ['share', 'proportion', 'percent', 'breakdown']):
+            fig = px.pie(df, names=x_col, values=y_col, title=question.title())
+        elif any(w in q for w in ['compare', 'vs', 'versus', 'difference', 'between']):
+            fig = px.bar(df, x=x_col, y=y_col, title=question.title(),
                          color_discrete_sequence=['#1D9E75'])
-        elif any(w in q for w in ['share', 'proportion', 'percent', 'distribution']):
-            fig = px.pie(df, names=x_col, values=y_col,
-                         title=question.title())
         elif len(df) <= 20:
-            fig = px.bar(df, x=x_col, y=y_col,
-                         title=question.title(),
-                         color=y_col,
-                         color_continuous_scale='Blues')
+            fig = px.bar(df, x=x_col, y=y_col, title=question.title(),
+                         color=y_col, color_continuous_scale='Blues')
         else:
-            fig = px.line(df, x=x_col, y=y_col,
-                          title=question.title(),
+            fig = px.line(df, x=x_col, y=y_col, title=question.title(),
                           color_discrete_sequence=['#378ADD'])
-
         fig.update_layout(
-            plot_bgcolor='white',
-            paper_bgcolor='white',
+            plot_bgcolor='white', paper_bgcolor='white',
             font=dict(family='Arial', size=12),
-            title_font_size=14,
-            height=400
+            title_font_size=14, height=400
         )
         return fig
     except Exception:
         return None
 
-# ── Initialize database ───────────────────────────────────────────────────────
-if not os.path.exists(DB_PATH):
-    load_database()
+# ── Session state ─────────────────────────────────────────────────────────────
 
-schema = get_schema()
+if "db_path"    not in st.session_state:
+    st.session_state["db_path"]    = DEFAULT_DB
+if "table_name" not in st.session_state:
+    st.session_state["table_name"] = DEFAULT_TABLE
+if "dataset_name" not in st.session_state:
+    st.session_state["dataset_name"] = "Superstore Sales (default)"
+if "schema"     not in st.session_state:
+    if not os.path.exists(DEFAULT_DB):
+        if os.path.exists(DEFAULT_CSV):
+            df_default = pd.read_csv(DEFAULT_CSV, encoding='latin-1')
+            csv_to_sqlite(df_default, DEFAULT_TABLE, DEFAULT_DB)
+    st.session_state["schema"] = get_schema(DEFAULT_DB)
 
 # ── UI ────────────────────────────────────────────────────────────────────────
-st.title("📊 AI Business Insight Assistant")
-st.markdown(
-    "Ask any business question in plain English and get instant "
-    "SQL queries, charts, and answers."
-)
 
+st.title("📊 AI Business Insight Assistant")
+st.markdown("Ask any business question in plain English — works with any CSV dataset.")
 st.divider()
 
 # Sidebar
 with st.sidebar:
-    st.header("About")
-    st.markdown("""
-**Dataset:** Superstore Sales
-**Powered by:** Groq LLaMA 3.3 70B
-**Backend:** SQLite + Python
+    st.header("Dataset")
 
-**Example questions:**
-""")
+    st.markdown("**Current dataset:**")
+    st.info(st.session_state["dataset_name"])
 
+    st.markdown("**Upload your own CSV:**")
+    uploaded_file = st.file_uploader(
+        "Drop any CSV file here",
+        type=["csv"],
+        help="The app will automatically load your data and let you ask questions about it"
+    )
+
+    if uploaded_file is not None:
+        try:
+            df_upload = pd.read_csv(uploaded_file, encoding='latin-1')
+            table_name = re.sub(r'[^a-z0-9_]', '_',
+                                uploaded_file.name.replace('.csv', '').lower())
+
+            tmp_db = os.path.join(tempfile.gettempdir(), f"{table_name}.db")
+            csv_to_sqlite(df_upload, table_name, tmp_db)
+
+            st.session_state["db_path"]      = tmp_db
+            st.session_state["table_name"]   = table_name
+            st.session_state["dataset_name"] = uploaded_file.name
+            st.session_state["schema"]       = get_schema(tmp_db)
+
+            st.success(f"Loaded: {uploaded_file.name}")
+            st.markdown(f"**Rows:** {len(df_upload):,}   **Columns:** {len(df_upload.columns)}")
+
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
+
+    if st.button("Reset to default Superstore data", use_container_width=True):
+        st.session_state["db_path"]      = DEFAULT_DB
+        st.session_state["table_name"]   = DEFAULT_TABLE
+        st.session_state["dataset_name"] = "Superstore Sales (default)"
+        st.session_state["schema"]       = get_schema(DEFAULT_DB)
+        st.rerun()
+
+    st.divider()
+
+    st.markdown("**Example questions:**")
     example_questions = [
         "Which region has the highest total sales?",
         "Show me the top 5 products by profit",
@@ -202,12 +215,12 @@ with st.sidebar:
         "What are the top 10 customers by revenue?",
         "Compare sales across shipping modes",
     ]
-
     for q in example_questions:
         if st.button(q, use_container_width=True):
             st.session_state['question'] = q
 
     st.divider()
+    st.caption("Powered by Groq LLaMA 3.3 70B")
     st.caption("Built by Prabin Pokhrel")
     st.caption("github.com/PrabinPokhrel")
 
@@ -225,20 +238,15 @@ with col1:
 with col2:
     st.write("")
     st.write("")
-    ask_button = st.button(
-        "Get Answer",
-        type="primary",
-        use_container_width=True
-    )
+    ask_button = st.button("Get Answer", type="primary", use_container_width=True)
 
 if ask_button and question:
     with st.spinner("Thinking..."):
-
-        groq_response = ask_groq(question, schema)
+        groq_response = ask_groq(question, st.session_state["schema"])
         sql           = extract_sql(groq_response)
 
         if sql:
-            df_result, error = run_query(sql)
+            df_result, error = run_query(sql, st.session_state["db_path"])
 
             with st.expander("Generated SQL Query", expanded=False):
                 st.code(sql, language='sql')
@@ -248,7 +256,6 @@ if ask_button and question:
                 st.info("Try rephrasing your question.")
 
             elif df_result is not None and not df_result.empty:
-
                 fig = generate_chart(df_result, question)
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
@@ -269,7 +276,6 @@ Be specific with numbers. Focus on actionable findings.
                     messages=[{"role": "user", "content": insight_prompt}],
                     temperature=0.3
                 )
-
                 st.success("💡 Business Insight")
                 st.write(insight_response.choices[0].message.content)
 
@@ -283,6 +289,5 @@ Be specific with numbers. Focus on actionable findings.
 elif ask_button and not question:
     st.warning("Please enter a question first.")
 
-# Database info
 with st.expander("Database Schema", expanded=False):
-    st.code(schema)
+    st.code(st.session_state["schema"])
