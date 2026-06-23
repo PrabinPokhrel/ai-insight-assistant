@@ -51,7 +51,7 @@ ai-insight-assistant/
 
 ## Dataset
 
-Superstore Sales Dataset — publicly available on Kaggle:
+Superstore Sales Dataset - publicly available on Kaggle:
 https://www.kaggle.com/datasets/vivek468/superstore-dataset-final
 
 9,994 orders across 4 regions, 3 customer segments, 
