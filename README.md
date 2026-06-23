@@ -2,7 +2,7 @@
 
 An AI-powered business analytics app that lets you ask plain English 
 questions about sales data and get instant SQL queries, charts, and 
-actionable insights — powered by Groq LLaMA 3.3 70B and Streamlit.
+actionable insights - powered by Groq LLaMA 3.3 70B and Streamlit.
 
 ## Live Demo
 
