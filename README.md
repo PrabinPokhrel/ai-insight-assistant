@@ -80,6 +80,12 @@ SQLite database query
 
 Plotly chart + data table + business insight
 
+## Features
+
+- Upload any CSV dataset and ask questions about your own data
+- Supports any structured CSV sales, HR, financial, marketing data
+- Auto-detects column types and generates appropriate charts
+
 ## How to run locally
 
 1. Clone the repo
