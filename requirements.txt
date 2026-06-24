@@ -1,5 +1,5 @@
 streamlit
-groq
-sqlalchemy
-plotly
 pandas
+plotly
+groq
+python-dotenv
