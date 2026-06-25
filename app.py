@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from groq import Groq
 import sqlite3
