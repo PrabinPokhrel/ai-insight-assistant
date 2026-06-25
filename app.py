@@ -157,7 +157,7 @@ if "schema"     not in st.session_state:
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.title("📊 AI Business Insight Assistant")
-st.markdown("Ask any business question in plain English — works with any CSV dataset.")
+st.markdown("Ask any business question in plain English. App works with any CSV dataset.")
 st.divider()
 
 # Sidebar
